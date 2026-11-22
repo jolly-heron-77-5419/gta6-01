@@ -80,3 +80,32 @@ export function lerp(a, b, t) { return a + (b - a) * t; }
 export function rand(a, b) { return a + Math.random() * (b - a); }
 export function randi(a, b) { return Math.floor(rand(a, b + 1)); }
 export function dist2(ax, az, bx, bz) { const dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; }
+
+/** Wrap an angle in radians to (-PI, PI]. Used wherever a heading is steered
+ *  toward a target heading (traffic AI, police pursuit) so the turn always
+ *  takes the short way around instead of spinning a full circle. */
+export function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+/** World X/Z coordinate of the i-th road centreline (i = 0..blockCount).
+ *  Roads sit half a block pitch outside the first/last block centres, so
+ *  line 0 is at origin - pitch/2 and line blockCount at the far edge. */
+export function roadLineAt(i) {
+  const origin = -((WORLD.blockCount - 1) * WORLD.blockSize) / 2;
+  return origin - WORLD.blockSize / 2 + i * WORLD.blockSize;
+}
+
+/** Snap a coordinate to the nearest road centreline. Traffic cars use this
+ *  when they turn onto a new road so they never end up driving between
+ *  roads (off the grid) after a turn. */
+export function nearestRoadLine(v) {
+  let best = roadLineAt(0), bestD = Infinity;
+  for (let i = 0; i <= WORLD.blockCount; i++) {
+    const c = roadLineAt(i), d = Math.abs(v - c);
+    if (d < bestD) { best = c; bestD = d; }
+  }
+  return best;
+}

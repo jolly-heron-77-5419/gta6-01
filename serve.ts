@@ -38,6 +38,12 @@ const MIME: Record<string, string> = {
 };
 
 createServer((request, response) => {
+  // This server only reads files: anything that would write (POST, PUT,
+  // DELETE, ...) has nothing to do here.
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
+    return;
+  }
   const url = new URL(request.url ?? '/', 'http://localhost');
   let pathname: string;
   try {
@@ -65,7 +71,11 @@ createServer((request, response) => {
     'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'content-length': size,
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
   });
+  // HEAD asks for headers only: piping the file body would violate the
+  // method (and confuse caches and link checkers that rely on HEAD).
+  if (request.method === 'HEAD') { response.end(); return; }
   createReadStream(file).pipe(response);
 }).listen(port, '127.0.0.1', () => {
   console.log(`game/ is on http://localhost:${port}`);

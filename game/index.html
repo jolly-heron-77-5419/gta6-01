@@ -4,6 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="SOLMAR BAY — an original open-world crime game: steal cars, outrun the police through a 5-star wanted system and run three story jobs across a sun-soaked coastal city. Runs fully offline.">
 <title>SOLMAR BAY — Open-World Crime Story</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0b1622;font-family:'Segoe UI',Arial,sans-serif}
@@ -44,6 +45,7 @@
   .btn{pointer-events:auto;cursor:pointer;margin:8px;padding:13px 34px;font-size:18px;font-weight:800;color:#10202f;
     background:#ffd23e;border:none;border-radius:10px;box-shadow:0 4px 0 #b3541e}
   .btn:hover{background:#ffe066}
+  .btn:focus-visible{outline:3px solid #9fd8ff;outline-offset:3px}
   .btn.ghost{background:transparent;color:#fff;border:2px solid #fff;box-shadow:none}
   .keys{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:13px;text-align:left;
     background:rgba(0,0,0,.45);padding:14px 20px;border-radius:10px;margin-top:10px}
@@ -57,6 +59,7 @@
 </script>
 </head>
 <body>
+<noscript><p style="color:#fff;text-align:center;padding:20px">SOLMAR BAY needs JavaScript to run — please enable it and reload.</p></noscript>
 <div id="game"></div>
 
 <div id="hud" class="hidden">
@@ -66,7 +69,7 @@
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="speedo" class="hidden"><b>0</b> mph<br><span id="carname"></span></div>
   <div id="hint">WASD move / drive · Mouse drag look · E enter car · F punch · Click shoot · Shift run · Space jump · M mission · P pause</div>
-  <div id="toast"></div>
+  <div id="toast" aria-live="polite"></div>
   <div id="crosshair" class="hidden">+</div>
 </div>
 

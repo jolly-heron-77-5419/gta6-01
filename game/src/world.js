@@ -10,6 +10,10 @@ export class World {
     this.scene = scene;
     this.colliders = [];   // {x, z, hx, hz}
     this.roadLines = [];   // road centre lines for traffic loops
+    // Shared palm materials: dozens of palms share two materials instead
+    // of allocating a fresh pair per tree.
+    this.palmTrunkMat = new THREE.MeshLambertMaterial({ color: 0x8a6a42 });
+    this.palmTopMat = new THREE.MeshLambertMaterial({ color: 0x2f9e44 });
     this.build();
   }
 
@@ -148,14 +152,15 @@ export class World {
   }
 
   palm(x, z) {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 5, 6),
-      new THREE.MeshLambertMaterial({ color: 0x8a6a42 }));
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 5, 6), this.palmTrunkMat);
     trunk.position.set(x, 2.5, z); trunk.castShadow = true;
     this.scene.add(trunk);
-    const top = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6),
-      new THREE.MeshLambertMaterial({ color: 0x2f9e44 }));
+    const top = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6), this.palmTopMat);
     top.position.set(x, 5.4, z); top.scale.y = 0.55; top.castShadow = true;
     this.scene.add(top);
+    // The trunk is solid: the player and cars should walk/drive around it,
+    // not through it.
+    this.colliders.push({ x, z, hx: 0.5, hz: 0.5 });
   }
 
   landmark(x, z, h, color, label) {
@@ -173,7 +178,10 @@ export class World {
     c.width = 512; c.height = 96;
     const g = c.getContext('2d');
     g.fillStyle = '#101826'; g.fillRect(0, 0, 512, 96);
-    g.fillStyle = '#ffd23e'; g.font = 'bold 56px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    // The caller picks the letter colour (gold for the boardwalk sign,
+    // white for landmark signs) — previously this always drew gold.
+    g.fillStyle = '#' + color.toString(16).padStart(6, '0');
+    g.font = 'bold 56px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(text, 256, 52);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
     const board = new THREE.Mesh(new THREE.PlaneGeometry(18 * (scale / 5), 3.4 * (scale / 5)),

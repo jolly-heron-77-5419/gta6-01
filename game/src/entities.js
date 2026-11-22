@@ -3,7 +3,7 @@
 // Traffic cars loop the road grid and turn at the city edge onto the next road.
 
 import * as THREE from 'three';
-import { CAR_DEFS, POLICE_COLOR, PLAYER, WORLD, clamp, dist2, rand, randi } from './config.js';
+import { CAR_DEFS, POLICE_COLOR, PLAYER, WORLD, clamp, dist2, nearestRoadLine, rand, randi, wrapAngle } from './config.js';
 
 function makePersonMesh(shirt, pants, skin = 0xd9a06b) {
   const g = new THREE.Group();
@@ -103,6 +103,7 @@ export class Pedestrian {
     scene.add(this.mesh);
     this.world = world;
     this.speed = rand(1.2, 2.2);
+    this.cruiseSpeed = this.speed; // walking pace to return to after fleeing
     this.heading = rand(0, Math.PI * 2);
     this.fleeing = 0;
     this.health = 50;
@@ -117,7 +118,7 @@ export class Pedestrian {
       this.heading = Math.atan2(this.mesh.position.x - danger.x, this.mesh.position.z - danger.z);
       this.speed = 5;
     } else {
-      this.speed = 1.6;
+      this.speed = this.cruiseSpeed;
       if (this.retarget <= 0) {
         this.retarget = rand(3, 8);
         this.heading = rand(0, Math.PI * 2);
@@ -153,7 +154,14 @@ export class Traffic {
       const car = new Car(scene, def, horizontal ? along : line, horizontal ? line : along,
         horizontal ? (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : (Math.random() < 0.5 ? 0 : Math.PI));
       car.driver = 'traffic'; car.parked = false;
-      car.loop = { horizontal, line, dir: Math.random() < 0.5 ? 1 : -1 };
+      // dir is the travel direction along the current road: for a horizontal
+      // road it is the X sign (heading PI/2 -> +X), for a vertical road the
+      // Z sign (heading 0 -> +Z). It is derived from the starting heading,
+      // not rolled again, so the car never starts out driving backwards.
+      const dir = horizontal
+        ? (car.heading === Math.PI / 2 ? 1 : -1)
+        : (car.heading === 0 ? 1 : -1);
+      car.loop = { horizontal, line, dir };
       this.cars.push(car);
     }
   }
@@ -169,26 +177,27 @@ export class Traffic {
         steer = clamp((targetZ - p.z) * 0.1, -1, 1) * (car.loop.dir > 0 ? 1 : -1);
         // keep heading roughly east/west
         const want = car.loop.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-        let dh = want - car.heading;
-        while (dh > Math.PI) dh -= Math.PI * 2;
-        while (dh < -Math.PI) dh += Math.PI * 2;
+        const dh = wrapAngle(want - car.heading);
         car.heading += clamp(dh, -1.4 * dt, 1.4 * dt);
         if (p.x > edge || p.x < -edge) {
           car.loop.horizontal = false;
-          car.loop.line = car.loop.dir > 0 ? p.z + 52 : p.z - 52;
-          car.loop.line = clamp(car.loop.line, -180, 180);
+          // Turn onto the nearest real road line (not p.z +/- 52, which can
+          // land between roads once the car has drifted off its line) and
+          // head back into town: south edge -> north, north edge -> south.
+          car.loop.line = nearestRoadLine(p.z);
+          car.loop.dir = p.z > 0 ? -1 : 1;
           car.heading = p.z > 0 ? Math.PI : 0;
         }
       } else {
-        const want = p.z > 0 || car.heading > 0 ? 0 : Math.PI;
-        let dh = want - car.heading;
-        while (dh > Math.PI) dh -= Math.PI * 2;
-        while (dh < -Math.PI) dh += Math.PI * 2;
+        // Vertical road: heading follows the stored travel direction, so a
+        // car never flips around just because it crossed the z = 0 line.
+        const want = car.loop.dir > 0 ? 0 : Math.PI;
+        const dh = wrapAngle(want - car.heading);
         car.heading += clamp(dh, -1.4 * dt, 1.4 * dt);
         if (p.z > edge || p.z < -edge) {
           car.loop.horizontal = true;
           car.loop.dir = Math.random() < 0.5 ? 1 : -1;
-          car.loop.line = clamp(p.x, -180, 180);
+          car.loop.line = nearestRoadLine(p.x);
           car.heading = car.loop.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
         }
       }

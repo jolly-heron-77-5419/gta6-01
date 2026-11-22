@@ -3,7 +3,7 @@
 // Original open-world crime game. Runs offline from static files.
 
 import * as THREE from 'three';
-import { WORLD, PLAYER, CAR_DEFS, MISSIONS, PICKUPS, clamp, dist2, rand, randi } from './config.js';
+import { WORLD, PLAYER, CAR_DEFS, MISSIONS, PICKUPS, clamp, dist2, rand, randi, wrapAngle } from './config.js';
 import { World } from './world.js';
 import { Input } from './input.js';
 import { SoundBank } from './audio.js';
@@ -160,6 +160,7 @@ function startGame(fromSave) {
 }
 
 function endGame(kind) {
+  if (S.mode === 'busted' || S.mode === 'wasted') return; // already over — don't re-run bail/fines
   S.mode = kind;
   sound.stopEngine(); sound.siren(false);
   if (kind === 'busted') {
@@ -194,7 +195,7 @@ function hasSave() { return !!loadSave(); }
 
 $('btnStart').onclick = () => startGame(false);
 $('btnContinue').onclick = () => startGame(true);
-$('btnResume').onclick = () => { hide('pauseScreen'); S.mode = 'play'; };
+$('btnResume').onclick = () => { hide('pauseScreen'); input.resetTransient(); S.mode = 'play'; };
 $('btnSaveQuit').onclick = () => { saveGame(); hide('pauseScreen'); hud.hide(); show('startScreen'); S.mode = 'title'; refreshTitle(); };
 $('btnRetry').onclick = () => { hide('endScreen'); S.health = PLAYER.maxHealth; setWanted(0); player.position.set(0, 0, -40); S.mode = 'play'; };
 $('btnEndTitle').onclick = () => { hide('endScreen'); hud.hide(); show('startScreen'); S.mode = 'title'; refreshTitle(); };
@@ -208,6 +209,7 @@ input.onKey = (code) => {
   if (S.mode !== 'play') return;
   if (code === 'KeyP' || code === 'Escape') {
     S.mode = 'pause';
+    input.resetTransient(); // a held click must not shoot on resume
     $('pauseStats').textContent = `Money $${S.money} · Jobs done ${missions.completed}/3 · Cars stolen ${S.carsStolen} · Time ${Math.floor(S.playTime / 60)} min`;
     show('pauseScreen');
     saveGame();
@@ -260,6 +262,18 @@ function toggleCar() {
 }
 
 // ---------- combat ----------
+// A knocked-out pedestrian disappears, then walks back in somewhere else
+// in the city after a few seconds. One helper — punch, shooting and
+// running someone over all used to paste this same block inline.
+function respawnPed(p) {
+  p.mesh.visible = false;
+  p.health = 50;
+  setTimeout(() => {
+    p.mesh.visible = true;
+    p.mesh.position.set(rand(-180, 180), 0, rand(-180, 180));
+  }, 8000);
+}
+
 function punch() {
   if (S.inCar) return;
   sound.punch();
@@ -270,10 +284,15 @@ function punch() {
     if (d < 2.2) {
       p.health -= 25;
       p.fleeing = 4;
-      p.mesh.position.x += Math.sin(p.mesh.rotation.y) * 1.2;
-      p.mesh.position.z += Math.cos(p.mesh.rotation.y) * 1.2;
+      // Knockback pushes the pedestrian AWAY from the player. (It used to
+      // push along the pedestrian's own facing, which could shove them
+      // straight through the player.)
+      const kx = p.mesh.position.x - player.position.x, kz = p.mesh.position.z - player.position.z;
+      const kl = Math.hypot(kx, kz) || 1;
+      p.mesh.position.x += (kx / kl) * 1.2;
+      p.mesh.position.z += (kz / kl) * 1.2;
       addWanted(1);
-      if (p.health <= 0) { p.mesh.visible = false; p.health = 50; setTimeout(() => { p.mesh.visible = true; p.mesh.position.set(rand(-180, 180), 0, rand(-180, 180)); }, 8000); }
+      if (p.health <= 0) respawnPed(p);
       hud.toast('You punched a pedestrian! The cops noticed.');
     }
   }
@@ -303,7 +322,7 @@ function shoot() {
     const pt = new THREE.Vector3(p.mesh.position.x, 1.2, p.mesh.position.z);
     if (ray.distanceToPoint(pt) < 1.6 && ray.direction.dot(pt.clone().sub(from).normalize()) > 0.9) {
       p.health -= 34; p.fleeing = 5; hitAny = true;
-      if (p.health <= 0) { p.mesh.visible = false; p.health = 50; setTimeout(() => { p.mesh.visible = true; p.mesh.position.set(rand(-180, 180), 0, rand(-180, 180)); }, 8000); }
+      if (p.health <= 0) respawnPed(p);
     }
   }
   for (const c of allCars()) {
@@ -429,16 +448,16 @@ function updateDriving(dt) {
   for (const p of peds) {
     if (!p.mesh.visible) continue;
     if (dist2(car.pos.x, car.pos.z, p.mesh.position.x, p.mesh.position.z) < 5 && Math.abs(car.speed) > 4) {
-      p.health = 0; p.mesh.visible = false;
-      setTimeout(() => { p.mesh.visible = true; p.health = 50; p.mesh.position.set(rand(-180, 180), 0, rand(-180, 180)); }, 8000);
+      p.health = 0;
+      respawnPed(p);
       S.pedsHit++;
       addWanted(1);
       hud.toast('You ran someone over! Wanted level up.');
     }
   }
   sound.engine(Math.abs(car.speed) / car.def.maxSpeed, true);
-  // camera follows car heading when not looking around recently
-  S.camYaw += (car.heading - S.camYaw) * 0.0; // free camera; player steers with mouse
+  // The camera stays free: the player steers the view with the mouse, the
+  // car does not drag the camera around behind it.
 }
 
 function updatePolice(dt) {
@@ -461,9 +480,7 @@ function updatePolice(dt) {
     const dx = target.x - pc.pos.x, dz = target.z - pc.pos.z;
     const d = Math.hypot(dx, dz);
     const wantHeading = Math.atan2(dx, dz);
-    let dh = wantHeading - pc.heading;
-    while (dh > Math.PI) dh -= Math.PI * 2;
-    while (dh < -Math.PI) dh += Math.PI * 2;
+    const dh = wrapAngle(wantHeading - pc.heading);
     const steer = clamp(dh * 1.4, -1, 1);
     const throttle = d > 6 ? 1 : 0.4;
     pc.update(dt, throttle, steer);
@@ -565,7 +582,6 @@ function animate() {
       sound,
     });
     if (ev === 'storyDone') {
-      S.money += 0;
       $('winText').textContent = `All three jobs done. Marlo Vane is paid off, Lena's crew is yours, and Solmar Bay is wide open. You earned $${S.money.toLocaleString('en-US')} — keep playing in free roam.`;
       show('winScreen');
       S.mode = 'win';

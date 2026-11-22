@@ -21,7 +21,10 @@ export class Input {
       if (e.button === 0) this.clicked = true;
       this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY;
       if (document.pointerLockElement !== canvas) {
-        try { canvas.requestPointerLock(); } catch (err) {}
+        // requestPointerLock returns a Promise in current Chrome; an
+        // unhandled rejection (e.g. the user pressed Esc a moment ago)
+        // would otherwise spam the console on every click.
+        try { Promise.resolve(canvas.requestPointerLock()).catch(() => {}); } catch (err) {}
       }
     });
     window.addEventListener('mouseup', () => { this.dragging = false; });
@@ -38,7 +41,20 @@ export class Input {
         this.lastX = e.clientX; this.lastY = e.clientY;
       }
     });
-    window.addEventListener('blur', () => { this.keys = {}; this.dragging = false; });
+    window.addEventListener('blur', () => {
+      this.keys = {}; this.dragging = false;
+      // Leaving the window also drops pointer lock; a stale click or look
+      // delta from before the blur must not fire when the player comes back.
+      if (document.pointerLockElement) document.exitPointerLock();
+      this.resetTransient();
+    });
+  }
+  /** Clear per-frame transient state (click, look deltas). Call when the
+   *  game pauses or resumes so input from the menu never leaks into play. */
+  resetTransient() {
+    this.clicked = false;
+    this.yawDelta = 0;
+    this.pitchDelta = 0;
   }
   down(code) { return !!this.keys[code]; }
   axis() {

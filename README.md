@@ -14,6 +14,17 @@ node serve.ts
 
 Then open http://localhost:8080 — no build step, no network requests, fully offline. three.js is vendored under `game/vendor/`.
 
+> The game uses ES module imports, so it must be served over HTTP — opening
+> `game/index.html` directly with `file://` will fail to load the modules.
+> `node serve.ts` is the intended way to run it (add `--port 8081` to pick
+> a different port); any static file server works too.
+
+## Screenshots
+
+The four cover shots live in `screenshots/` and are staged from the game
+itself with `?shot=chase|drive|street|start` (see `shots.json`): a police
+pursuit, a taxi drive, a street scene and the title screen.
+
 ## Play
 
 - **WASD** move / drive · **Mouse drag** look · **E** steal / enter a car · **F** punch · **Click** shoot

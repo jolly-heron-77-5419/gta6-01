@@ -11,6 +11,8 @@ export class MissionManager {
     this.active = null;      // {def, step}
     this.completed = 0;
     this.storyDone = false;
+    this.needCarToastAt = 0; // throttle for the "you need a car" reminder
+    this.pulse = 0;          // beacon breathing animation clock
     // Beacon: a light pillar + ring at the objective.
     const geo = new THREE.CylinderGeometry(1.6, 1.6, 60, 16, 1, true);
     this.beacon = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
@@ -44,10 +46,14 @@ export class MissionManager {
 
   showMarker() {
     const step = this.stepDef();
-    if (!step) { this.beacon.visible = false; this.ring.visible = false; this.arrow.visible = false; return; }
+    if (!step) { this.hideMarker(); return; }
     this.beacon.position.set(step.pos[0], 30, step.pos[1]);
     this.ring.position.set(step.pos[0], 0.4, step.pos[1]);
     this.beacon.visible = true; this.ring.visible = true; this.arrow.visible = true;
+  }
+
+  hideMarker() {
+    this.beacon.visible = false; this.ring.visible = false; this.arrow.visible = false;
   }
 
   // Called every frame. Returns an event string or null.
@@ -57,6 +63,13 @@ export class MissionManager {
     const step = this.stepDef();
     const dx = ctx.playerPos.x - step.pos[0], dz = ctx.playerPos.z - step.pos[1];
     const d = Math.hypot(dx, dz);
+    // Beacon breathing: the pillar gently pulses so the objective stays
+    // visible from across the city without strobing.
+    this.pulse += dt;
+    const breathe = 0.5 + 0.5 * Math.sin(this.pulse * 2.4);
+    this.beacon.material.opacity = 0.2 + 0.12 * breathe;
+    const ringScale = 1 + 0.12 * breathe;
+    this.ring.scale.set(ringScale, ringScale, 1);
     // Arrow hovers over the player and points at the objective.
     this.arrow.position.set(ctx.playerPos.x, 3.4, ctx.playerPos.z);
     this.arrow.lookAt(step.pos[0], 3.4, step.pos[1]);
@@ -67,7 +80,13 @@ export class MissionManager {
     }
     if (step.type === 'goto' && d < step.radius) {
       if (step.needsCar && !ctx.inCar) {
-        ctx.toast('You need a car for this — press E near one!');
+        // Throttled: without this the reminder re-fires every single frame
+        // while the player stands in the radius on foot, pinning the toast.
+        this.needCarToastAt -= dt;
+        if (this.needCarToastAt <= 0) {
+          ctx.toast('You need a car for this — press E near one!');
+          this.needCarToastAt = 3;
+        }
         return null;
       }
       if (step.wantedOnPickup) ctx.setWanted(step.wantedOnPickup);
@@ -86,7 +105,7 @@ export class MissionManager {
       this.active = null;
       this.index++;
       this.completed++;
-      this.beacon.visible = false; this.ring.visible = false; this.arrow.visible = false;
+      this.hideMarker();
       if (this.index >= MISSIONS.length) {
         this.storyDone = true;
         return 'storyDone';

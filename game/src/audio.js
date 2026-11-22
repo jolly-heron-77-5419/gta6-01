@@ -10,6 +10,7 @@ export class SoundBank {
     this.sirenNodes = null;
     this.engineNodes = null;
     this.musicStep = 0;
+    this.noiseBuf = null; // one shared 1 s noise buffer, built lazily
   }
   ensure() {
     if (!this.ctx) {
@@ -26,8 +27,11 @@ export class SoundBank {
   setMuted(m) {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : 0.35;
-    if (m) this.stopSiren();
+    if (m) this.stopAll();
   }
+  /** Stop every continuous sound (siren + engine hum). Used on mute and
+   *  on game over so nothing keeps droning after the game stops. */
+  stopAll() { this.stopSiren(); this.stopEngine(); }
   tone(freq, dur, type = 'sine', vol = 0.3, slideTo = 0) {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
@@ -43,17 +47,26 @@ export class SoundBank {
   noise(dur, vol = 0.25, lowpass = 1200) {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
-    const len = Math.floor(this.ctx.sampleRate * dur);
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    // Reuse one shared 1 s noise buffer instead of allocating a fresh
+    // AudioBuffer on every punch, shot and hi-hat — noise() is the hottest
+    // sound path in the game. Shorter sounds just play a slice of it.
+    if (!this.noiseBuf) {
+      const len = this.ctx.sampleRate;
+      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
     const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    src.loopEnd = dur;
     const f = this.ctx.createBiquadFilter();
     f.type = 'lowpass'; f.frequency.value = lowpass;
-    const g = this.ctx.createGain(); g.gain.value = vol;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     src.connect(f); f.connect(g); g.connect(this.master);
-    src.start(t);
+    src.start(t); src.stop(t + dur + 0.02);
   }
   punch() { this.noise(0.12, 0.5, 500); this.tone(90, 0.1, 'square', 0.2, 50); }
   shoot() { this.noise(0.09, 0.4, 3500); this.tone(220, 0.08, 'sawtooth', 0.15, 60); }
@@ -105,7 +118,7 @@ export class SoundBank {
     if (!this.ctx || this.musicTimer) return;
     const bass = [55, 0, 55, 0, 65.4, 0, 49, 0, 55, 0, 55, 0, 82.4, 73.4, 65.4, 0];
     this.musicTimer = setInterval(() => {
-      if (this.muted) return;
+      if (this.muted || document.hidden) return; // don't burn steps in a background tab
       const f = bass[this.musicStep % bass.length];
       if (f) this.tone(f, 0.22, 'triangle', 0.22);
       if (this.musicStep % 2 === 0) this.noise(0.03, 0.06, 6000);
