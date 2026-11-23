@@ -1,111 +1,145 @@
-// config.js — world constants, city layout and mission definitions for Solmar Bay.
-// Every name, place and character here is original fiction.
-// Road centrelines sit at multiples of the 52 m block pitch, offset by half a pitch.
+// SOLMAR BAY — shared tuning values and tiny math helpers.
+// One job: hold every number the rest of the game reads, so balance
+// changes happen here and nowhere else.
 
-export const WORLD = {
-  halfSize: 230,          // playable square, metres
-  roadWidth: 14,
-  blockSize: 52,          // block pitch (block + road)
-  blockInner: 36,         // buildable square inside a block
-  blockCount: 7,          // 7 x 7 blocks
-  saveKey: 'solmar-bay-save-v1',
+export const CFG = {
+  title: 'SOLMAR BAY',
+  city: {
+    halfSize: 170,          // playable ground runs -halfSize .. +halfSize on both axes
+    streetGap: 40,          // distance between neighbouring street centre lines
+    streetHalfWidth: 5,     // half the width of a road surface
+    laneOffset: 2.6,        // how far right of a centre line traffic drives
+    blockSize: 30,          // a city block is blockSize by blockSize
+    beachStartX: 158,       // sand begins here; the sea is further east
+    seaStartX: 188,
+    groundY: 0,
+  },
+  player: {
+    walkSpeed: 6,
+    runSpeed: 10,
+    radius: 0.6,
+    maxHealth: 100,
+    punchRange: 2.2,
+    punchDamage: 34,
+    punchCooldown: 0.45,
+  },
+  car: {
+    accel: 22,
+    brake: 34,
+    reverseAccel: 12,
+    maxSpeed: 38,
+    maxReverse: 10,
+    steerRate: 1.9,
+    grip: 6.5,
+    radius: 1.6,
+    maxDamage: 100,
+  },
+  traffic: {
+    count: 14,
+    cruiseMin: 8,
+    cruiseMax: 13,
+  },
+  pedestrians: {
+    count: 22,
+    walkMin: 1.1,
+    walkMax: 2.2,
+  },
+  police: {
+    maxCars: 4,
+    chaseSpeed: 30,
+    ramDamage: 12,
+    spawnDistance: 55,
+    loseSightSeconds: 9,
+  },
+  wanted: {
+    maxStars: 5,
+    stealCarStars: 1,
+    hitPedestrianStars: 1,
+    ramPoliceStars: 1,
+    decaySeconds: 14,
+  },
+  missions: {
+    pickupReward: 150,
+    stealReward: 400,
+    warehouseReward: 800,
+  },
+  saveKey: 'solmar-bay-save-v3',
 };
 
-export const PLAYER = {
-  walkSpeed: 6,
-  runSpeed: 10.5,
-  jumpSpeed: 8.5,
-  radius: 0.7,
-  maxHealth: 100,
+// A small deterministic generator so the city looks the same every load
+// while still feeling hand-placed. Seeded with a plain mulberry32.
+export function makeRng(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function clamp(value, low, high) {
+  return value < low ? low : value > high ? high : value;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// Shortest signed turn from angle `from` toward angle `to`.
+export function angleDelta(from, to) {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// Pick one entry from an array with the given rng.
+export function pick(rng, list) {
+  return list[Math.floor(rng() * list.length)];
+}
+
+// Second pass on config: colour palette and mission text live here too,
+// so the world builder and the story file never hard-code a look.
+
+CFG.palette = {
+  skyTop: 0x7ec8ee,
+  skyHorizon: 0xffe3b3,
+  sun: 0xfff2c8,
+  sea: 0x2e7fa8,
+  sand: 0xe8d29a,
+  asphalt: 0x3a3f46,
+  sidewalk: 0x9aa0a3,
+  grass: 0x7fae62,
+  buildingGlass: 0x9fd4e8,
 };
 
-export const CAR_DEFS = [
-  { name: 'Palm Runner', color: 0xe2483d, top: 0.24, accel: 26, maxSpeed: 34 },
-  { name: 'Bay Cruiser', color: 0x2e7fd9, top: 0.30, accel: 22, maxSpeed: 30 },
-  { name: 'Sunset Coupe', color: 0xf2a007, top: 0.22, accel: 30, maxSpeed: 38 },
-  { name: 'Harbor Van', color: 0x8a93a0, top: 0.34, accel: 18, maxSpeed: 25 },
-  { name: 'Coral Taxi', color: 0xffd23e, top: 0.26, accel: 24, maxSpeed: 32 },
-  { name: 'Midnight GT', color: 0x1d2430, top: 0.20, accel: 34, maxSpeed: 44 },
-];
-
-export const POLICE_COLOR = 0x1b2a4a;
-
-// Missions: a three-job story arc. Positions are world XZ coordinates.
-export const MISSIONS = [
-  {
-    id: 'fare',
-    title: 'JOB 1 — FIRST FARE',
-    intro: 'Lena needs a cab ride across town. Steal a car if you have to — grab the Coral Taxi by the motel, pick Lena up, then drop her at the marina.',
-    steps: [
-      { type: 'goto', label: 'Pick up Lena at the Neon Palm motel', pos: [-104, -104], radius: 6 },
-      { type: 'goto', label: 'Drive Lena to the Marina — no scratches, no cops', pos: [104, 104], radius: 7, needsCar: true },
-    ],
-    reward: 250,
-  },
-  {
-    id: 'cargo',
-    title: 'JOB 2 — HOT CARGO',
-    intro: 'A package is waiting at the docks. The Bay Police got a tip — expect company. Grab it and lose the heat at the hideout.',
-    steps: [
-      { type: 'goto', label: 'Collect the package at the south docks', pos: [0, 190], radius: 6 },
-      { type: 'escape', label: 'Lose the cops, then reach the hideout', pos: [-150, 150], radius: 8, wantedOnPickup: 2 },
-    ],
-    reward: 500,
-  },
-  {
-    id: 'getaway',
-    title: 'JOB 3 — THE GETAWAY',
-    intro: "Marlo Vane's crew hit the casino vault. You're the wheelman. Get the crew to the airport road while the whole city is after you.",
-    steps: [
-      { type: 'goto', label: 'Pick up the crew at the casino', pos: [104, -104], radius: 7, wantedOnPickup: 3 },
-      { type: 'goto', label: 'Outrun the police — reach the airport road', pos: [190, 0], radius: 9, needsCar: true },
-    ],
-    reward: 1000,
-  },
-];
-
-export const PICKUPS = [
-  { kind: 'cash', pos: [60, -60], amount: 75 },
-  { kind: 'cash', pos: [-60, 60], amount: 75 },
-  { kind: 'cash', pos: [140, 40], amount: 100 },
-  { kind: 'cash', pos: [-140, -40], amount: 100 },
-  { kind: 'cash', pos: [20, 140], amount: 50 },
-  { kind: 'health', pos: [-20, -140], amount: 50 },
-  { kind: 'health', pos: [120, -120], amount: 50 },
-  { kind: 'health', pos: [-120, 120], amount: 50 },
-];
-
-export function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
-export function lerp(a, b, t) { return a + (b - a) * t; }
-export function rand(a, b) { return a + Math.random() * (b - a); }
-export function randi(a, b) { return Math.floor(rand(a, b + 1)); }
-export function dist2(ax, az, bx, bz) { const dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; }
-
-/** Wrap an angle in radians to (-PI, PI]. Used wherever a heading is steered
- *  toward a target heading (traffic AI, police pursuit) so the turn always
- *  takes the short way around instead of spinning a full circle. */
-export function wrapAngle(a) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
-}
-
-/** World X/Z coordinate of the i-th road centreline (i = 0..blockCount).
- *  Roads sit half a block pitch outside the first/last block centres, so
- *  line 0 is at origin - pitch/2 and line blockCount at the far edge. */
-export function roadLineAt(i) {
-  const origin = -((WORLD.blockCount - 1) * WORLD.blockSize) / 2;
-  return origin - WORLD.blockSize / 2 + i * WORLD.blockSize;
-}
-
-/** Snap a coordinate to the nearest road centreline. Traffic cars use this
- *  when they turn onto a new road so they never end up driving between
- *  roads (off the grid) after a turn. */
-export function nearestRoadLine(v) {
-  let best = roadLineAt(0), bestD = Infinity;
-  for (let i = 0; i <= WORLD.blockCount; i++) {
-    const c = roadLineAt(i), d = Math.abs(v - c);
-    if (d < bestD) { best = c; bestD = d; }
-  }
-  return best;
-}
+CFG.story = {
+  fixer: 'Lena Cruz',
+  intro:
+    'New in Solmar Bay. Lena Cruz has work for you — three jobs, good pay, no questions.',
+  jobs: [
+    {
+      id: 'pickup',
+      name: 'Job 1 — First Pickup',
+      brief:
+        'Lena: "Package waiting at the pier, north end. Walk or drive, just bring it back to my corner."',
+      hint: 'Follow the gold marker to the pier and pick up the package.',
+    },
+    {
+      id: 'steal',
+      name: 'Job 2 — Borrowed Wheels',
+      brief:
+        'Lena: "I need that orange Comet GT parked by the marina. Take it — and lose whoever follows."',
+      hint: 'Steal the orange Comet GT and deliver it to the garage marker.',
+    },
+    {
+      id: 'warehouse',
+      name: 'Job 3 — Warehouse Run',
+      brief:
+        'Lena: "Last one. Two guards at the old cannery. Handle them, grab the crate, come home rich."',
+      hint: 'Deal with both guards, grab the crate, return to Lena.',
+    },
+  ],
+  done: 'All three jobs done. Solmar Bay is yours now — keep the engine running.',
+};

@@ -1,125 +1,134 @@
-// hud.js — HUD: health, money, wanted stars, clock, mission text, toasts,
-// speedometer and the live minimap (roads, player, cars, police, objective).
-// The minimap is a 2D canvas redrawn every frame from live game state.
+// SOLMAR BAY — the heads-up display and the minimap.
+// One job: keep the DOM readouts (health, stars, cash, objective,
+// speed) and the top-down minimap canvas in step with the game state.
+// It never decides game logic; it only shows it.
 
-import { WORLD, roadLineAt } from './config.js';
+import { CFG } from './config.js';
+import { STREET_LINES } from './world.js';
 
-export class HUD {
-  constructor() {
-    this.el = {
-      hud: document.getElementById('hud'),
-      money: document.getElementById('money'),
-      wanted: document.getElementById('wanted'),
-      clock: document.getElementById('clock'),
-      healthfill: document.getElementById('healthfill'),
-      healthlabel: document.getElementById('healthlabel'),
-      objTitle: document.getElementById('objTitle'),
-      objText: document.getElementById('objText'),
-      toast: document.getElementById('toast'),
-      speedo: document.getElementById('speedo'),
-      carname: document.getElementById('carname'),
-      crosshair: document.getElementById('crosshair'),
-      hint: document.getElementById('hint'),
-    };
-    this.map = document.getElementById('minimap');
-    this.mapCtx = this.map.getContext('2d');
-    this.toastTimer = null;
-    this.clockMin = 10 * 60 + 24;
-    this.day = 1;
-  }
-  show() { this.el.hud.classList.remove('hidden'); }
-  hide() {
-    this.el.hud.classList.add('hidden');
-    clearTimeout(this.toastTimer); // don't leave a stale toast for next time
-    this.el.toast.textContent = '';
-  }
+const MAP_HALF = 200; // world units the minimap covers on each side
 
-  toast(msg, ms = 2600) {
-    this.el.toast.textContent = msg;
-    clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => { this.el.toast.textContent = ''; }, ms);
+function starString(stars) {
+  let out = '';
+  for (let i = 0; i < CFG.wanted.maxStars; i++) out += i < stars ? '★' : '☆';
+  return out;
+}
+
+export function createHud(doc) {
+  const healthFill = doc.getElementById('health-fill');
+  const healthText = doc.getElementById('health-text');
+  const starsEl = doc.getElementById('stars');
+  const cashEl = doc.getElementById('cash');
+  const objectiveEl = doc.getElementById('objective');
+  const objectiveLabel = doc.getElementById('objective-label');
+  const speedEl = doc.getElementById('speed');
+  const speedValue = doc.getElementById('speed-value');
+  const bannerEl = doc.getElementById('banner');
+  const bannerTitle = doc.getElementById('banner-title');
+  const bannerText = doc.getElementById('banner-text');
+  const damageEl = doc.getElementById('damage-flash');
+  const mapCanvas = doc.getElementById('minimap');
+  const mapCtx = mapCanvas.getContext('2d');
+  let bannerTimer = null;
+  let flashTimer = null;
+
+  function toMap(x, z) {
+    const s = mapCanvas.width / (MAP_HALF * 2);
+    return { x: (x + MAP_HALF) * s, y: (z + MAP_HALF) * s };
   }
 
-  update(dt, s) {
-    // s: {money, health, wanted, inCar, carName, speedMph, mission, playerPos, heading, cars, police, peds, objective}
-    this.el.money.textContent = '$ ' + s.money.toLocaleString('en-US');
-    let stars = '';
-    for (let i = 0; i < 5; i++) stars += `<span class="star${i < s.wanted ? ' on' : ''}">★</span>`;
-    this.el.wanted.innerHTML = stars;
-    this.el.healthfill.style.width = Math.max(0, s.health) + '%';
-    this.el.healthfill.style.background = s.health > 50
-      ? 'linear-gradient(90deg,#37d67a,#a5f3c0)'
-      : s.health > 25 ? 'linear-gradient(90deg,#f2a007,#ffd23e)' : 'linear-gradient(90deg,#d93a3a,#ff7a7a)';
-    this.el.healthlabel.textContent = `DANNY REYES · HEALTH ${Math.max(0, Math.round(s.health))}`;
-    this.clockMin += dt * 2.2; // game clock runs faster than real time
-    if (this.clockMin >= 24 * 60) { this.clockMin -= 24 * 60; this.day++; }
-    const hh = String(Math.floor(this.clockMin / 60)).padStart(2, '0');
-    const mm = String(Math.floor(this.clockMin % 60)).padStart(2, '0');
-    this.el.clock.textContent = `DAY ${this.day} · ${hh}:${mm}`;
-    this.el.objTitle.textContent = s.mission.title;
-    this.el.objText.textContent = s.mission.text;
-    if (s.inCar) {
-      this.el.speedo.classList.remove('hidden');
-      this.el.speedo.querySelector('b').textContent = Math.round(Math.abs(s.speedMph));
-      this.el.carname.textContent = s.carName;
-    } else {
-      this.el.speedo.classList.add('hidden');
-    }
-    this.el.crosshair.classList.toggle('hidden', s.inCar);
-    this.drawMinimap(s);
-  }
+  return {
+    setHealth(health, max) {
+      const pct = Math.max(0, Math.round((health / max) * 100));
+      healthFill.style.width = `${pct}%`;
+      healthFill.style.background = pct > 50 ? '#37c978' : pct > 25 ? '#f0a832' : '#e5484d';
+      healthText.textContent = `${pct}`;
+    },
+    setStars(stars) {
+      starsEl.textContent = starString(stars);
+      starsEl.classList.toggle('hot', stars >= 3);
+    },
+    setCash(cash) {
+      cashEl.textContent = `$${cash.toLocaleString('en-US')}`;
+    },
+    setObjective(text, label) {
+      objectiveEl.textContent = text;
+      if (label) objectiveLabel.textContent = label;
+    },
+    setSpeed(kmh, driving) {
+      speedEl.style.display = driving ? 'block' : 'none';
+      if (driving) speedValue.textContent = `${Math.round(kmh)}`;
+    },
+    showBanner(title, text, seconds = 5) {
+      bannerTitle.textContent = title;
+      bannerText.textContent = text;
+      bannerEl.classList.add('show');
+      if (bannerTimer) clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => bannerEl.classList.remove('show'), seconds * 1000);
+    },
+    hideBanner() {
+      bannerEl.classList.remove('show');
+    },
+    flashDamage() {
+      damageEl.classList.add('show');
+      if (flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => damageEl.classList.remove('show'), 180);
+    },
 
-  drawMinimap(s) {
-    const g = this.mapCtx;
-    if (!g) return; // canvas 2D context unavailable — HUD still works
-    const W = this.map.width, H = this.map.height;
-    const half = WORLD.halfSize;
-    const px = (x) => ((x + half) / (half * 2)) * W;
-    const pz = (z) => ((z + half) / (half * 2)) * H;
-    g.clearRect(0, 0, W, H);
-    g.fillStyle = '#0e2438'; g.fillRect(0, 0, W, H);
-    // beach + ocean strip at the bottom (south)
-    g.fillStyle = '#e8d8a8'; g.fillRect(0, H - 14, W, 8);
-    g.fillStyle = '#1e7fb8'; g.fillRect(0, H - 6, W, 6);
-    // roads — centrelines come from the same constants as the 3D city,
-    // so the minimap can never drift out of sync with the world grid
-    g.strokeStyle = '#5a636e'; g.lineWidth = 4;
-    const lines = [];
-    for (let i = 0; i <= WORLD.blockCount; i++) lines.push(roadLineAt(i));
-    for (const c of lines) {
-      g.beginPath(); g.moveTo(px(c), 0); g.lineTo(px(c), H); g.stroke();
-      g.beginPath(); g.moveTo(0, pz(c)); g.lineTo(W, pz(c)); g.stroke();
-    }
-    // blocks
-    const n = WORLD.blockCount, pitch = WORLD.blockSize;
-    const origin = -((n - 1) * pitch) / 2;
-    const inner = WORLD.blockInner / (half * 2);
-    g.fillStyle = '#2c3a48';
-    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
-      g.fillRect(px(origin + i * pitch - WORLD.blockInner / 2), pz(origin + j * pitch - WORLD.blockInner / 2), inner * W, inner * H);
-    }
-    // objective marker
-    if (s.objectivePos) {
-      g.fillStyle = '#ffd23e';
-      g.beginPath(); g.arc(px(s.objectivePos[0]), pz(s.objectivePos[1]), 6, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
-    }
-    // traffic cars
-    g.fillStyle = '#9fb4c8';
-    for (const c of s.cars) { g.fillRect(px(c.pos.x) - 2, pz(c.pos.z) - 2, 4, 4); }
-    // police
-    g.fillStyle = '#ff4444';
-    for (const c of s.police) { g.fillRect(px(c.pos.x) - 3, pz(c.pos.z) - 3, 6, 6); }
-    // player arrow — drawn pointing up (-z, north) at rest. A heading h
-    // means forward (sin h, cos h) in world (x, z); on the map x runs right
-    // and z runs down, so the arrow must rotate by PI - h.
-    const x = px(s.playerPos.x), y = pz(s.playerPos.z);
-    g.save();
-    g.translate(x, y); g.rotate(Math.PI - s.heading);
-    g.fillStyle = '#fff';
-    g.beginPath(); g.moveTo(0, -8); g.lineTo(5, 6); g.lineTo(-5, 6); g.closePath(); g.fill();
-    g.restore();
-    // north label
-    g.fillStyle = '#fff'; g.font = 'bold 11px Arial'; g.fillText('N', 6, 13);
-  }
+    // Top-down map: sea and sand on the east edge, the street grid,
+    // then the player arrow, traffic, police and the mission marker.
+    drawMinimap(state, elapsed) {
+      const w = mapCanvas.width;
+      const ctx = mapCtx;
+      ctx.clearRect(0, 0, w, w);
+      ctx.fillStyle = '#20262e';
+      ctx.fillRect(0, 0, w, w);
+      // Sand and sea.
+      const sand = toMap(CFG.city.beachStartX, 0);
+      ctx.fillStyle = '#e8d29a';
+      ctx.fillRect(sand.x, 0, toMap(CFG.city.seaStartX, 0).x - sand.x, w);
+      ctx.fillStyle = '#2e7fa8';
+      ctx.fillRect(toMap(CFG.city.seaStartX, 0).x, 0, w, w);
+      // Roads.
+      ctx.strokeStyle = '#4a5058';
+      ctx.lineWidth = 5;
+      for (const line of STREET_LINES) {
+        const a = toMap(line, -MAP_HALF);
+        const b = toMap(line, MAP_HALF);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(a.y, a.x); ctx.lineTo(b.y, b.x); ctx.stroke();
+      }
+      const dot = (x, z, color, r) => {
+        const p = toMap(x, z);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      };
+      for (const car of state.cars) dot(car.x, car.z, '#ffd23c', 2.5);
+      for (const ped of state.pedestrians || []) dot(ped.x, ped.z, '#9fb4c8', 1.6);
+      for (const cop of state.police) {
+        dot(cop.x, cop.z, Math.floor(elapsed * 4) % 2 === 0 ? '#ff4444' : '#4488ff', 3.5);
+      }
+      if (state.marker) {
+        const p = toMap(state.marker.x, state.marker.z);
+        const pulse = 5 + Math.sin(elapsed * 4) * 2;
+        ctx.strokeStyle = '#ffc93c';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, pulse, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ffc93c';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
+      }
+      // Player arrow, pointing along the heading.
+      const pp = toMap(state.player.x, state.player.z);
+      ctx.save();
+      ctx.translate(pp.x, pp.y);
+      // Map x is world x and map y is world z, so a heading whose forward
+      // is (sin h, cos h) needs a canvas rotation of PI - h.
+      ctx.rotate(Math.PI - state.player.heading);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(0, -7); ctx.lineTo(5, 6); ctx.lineTo(-5, 6); ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    },
+  };
 }

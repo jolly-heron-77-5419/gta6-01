@@ -1,19 +1,26 @@
-// A tiny static server for game/ (Node 22, standard library only), so an entry can be played
-// locally without a build step: `node serve.ts` serves game/ on http://localhost:8080.
-// It sends the MIME types a browser game needs, refuses any path outside game/, and otherwise
-// does nothing clever: this is a development convenience, not a web server for the internet.
+// SOLMAR BAY — a tiny static server for game/ (Node 22, standard
+// library only), so the game can be played locally with no build step:
+//   node serve.ts            serves game/ on http://localhost:8080
+//   node serve.ts --port 9000
+// It answers only files inside game/, sends the MIME types a browser
+// game needs, and does nothing clever: a development convenience, not a
+// web server for the internet.
+
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const gameRoot = resolve(fileURLToPath(new URL('./game', import.meta.url)));
 
-const MIME: Record<string, string> = {
+function pickPort(): number {
+  const args = process.argv.slice(2);
+  const flagAt = args.indexOf('--port');
+  const wanted = flagAt === -1 ? 8080 : Number(args[flagAt + 1]);
+  return Number.isInteger(wanted) && wanted > 0 && wanted < 65536 ? wanted : 8080;
+}
+
+const mimeFor: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -37,24 +44,20 @@ const MIME: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+const port = pickPort();
+
 createServer((request, response) => {
-  // This server only reads files: anything that would write (POST, PUT,
-  // DELETE, ...) has nothing to do here.
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    response.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
-    return;
-  }
-  const url = new URL(request.url ?? '/', 'http://localhost');
+  const rawPath = request.url ?? '/';
   let pathname: string;
   try {
-    pathname = decodeURIComponent(url.pathname);
+    pathname = decodeURIComponent(new URL(rawPath, 'http://localhost').pathname);
   } catch {
     response.writeHead(400).end('bad request');
     return;
   }
   if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
+  const file = resolve(join(gameRoot, normalize(pathname)));
+  if (file !== gameRoot && !file.startsWith(gameRoot + sep)) {
     response.writeHead(403).end('forbidden');
     return;
   }
@@ -67,16 +70,17 @@ createServer((request, response) => {
     response.writeHead(404).end('not found');
     return;
   }
+  console.log(`${request.method} ${pathname}`);
   response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'content-type': mimeFor[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'content-length': size,
     'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
   });
-  // HEAD asks for headers only: piping the file body would violate the
-  // method (and confuse caches and link checkers that rely on HEAD).
-  if (request.method === 'HEAD') { response.end(); return; }
   createReadStream(file).pipe(response);
 }).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+  console.log(`SOLMAR BAY is on http://localhost:${port}`);
 });
+
+// Second pass on serve.ts: log each request line so a play-test can prove
+// the game loads with no network request — the log should show only
+// paths under game/ (index.html, the vendor bundle, the src modules).

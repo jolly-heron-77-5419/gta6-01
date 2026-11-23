@@ -1,74 +1,136 @@
-// input.js — keyboard + mouse state. Pointer lock on click, drag fallback.
-// One-shot keys are delivered through onKey so the game loop stays frame-clean.
+// SOLMAR BAY — keyboard and mouse input.
+// One job: turn raw key and pointer events into a small, stable state
+// the game loop reads every frame. Edge-triggered actions (press E, press
+// F) are consumed once per press so holding a key never double-fires.
 
-export class Input {
-  constructor(canvas) {
-    this.keys = {};
-    this.yawDelta = 0;
-    this.pitchDelta = 0;
-    this.clicked = false;       // left mouse click this frame (shoot)
-    this.dragging = false;
-    this.lastX = 0; this.lastY = 0;
-    this.onKey = null;          // callback(code) for one-shot keys
-    window.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
-      this.keys[e.code] = true;
-      if (this.onKey) this.onKey(e.code);
-      if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
-    });
-    window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
-    canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) this.clicked = true;
-      this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY;
-      if (document.pointerLockElement !== canvas) {
-        // requestPointerLock returns a Promise in current Chrome; an
-        // unhandled rejection (e.g. the user pressed Esc a moment ago)
-        // would otherwise spam the console on every click.
-        try { Promise.resolve(canvas.requestPointerLock()).catch(() => {}); } catch (err) {}
-      }
-    });
-    window.addEventListener('mouseup', () => { this.dragging = false; });
-    document.addEventListener('pointerlockchange', () => {
-      this.dragging = document.pointerLockElement === canvas;
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (document.pointerLockElement === canvas) {
-        this.yawDelta -= e.movementX * 0.0032;
-        this.pitchDelta -= e.movementY * 0.0028;
-      } else if (this.dragging) {
-        this.yawDelta -= (e.clientX - this.lastX) * 0.006;
-        this.pitchDelta -= (e.clientY - this.lastY) * 0.005;
-        this.lastX = e.clientX; this.lastY = e.clientY;
-      }
-    });
-    window.addEventListener('blur', () => {
-      this.keys = {}; this.dragging = false;
-      // Leaving the window also drops pointer lock; a stale click or look
-      // delta from before the blur must not fire when the player comes back.
-      if (document.pointerLockElement) document.exitPointerLock();
-      this.resetTransient();
-    });
+export function createInput() {
+  const down = new Set();
+  const pressed = new Set();
+  let cameraYaw = 0;      // mouse-drag orbit offset, radians
+  let cameraPitch = 0.32; // mouse-drag height offset, clamped below
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  function keyName(event) {
+    const k = event.key;
+    if (k === ' ') return 'Space';
+    return k.length === 1 ? k.toLowerCase() : k;
   }
-  /** Clear per-frame transient state (click, look deltas). Call when the
-   *  game pauses or resumes so input from the menu never leaks into play. */
-  resetTransient() {
-    this.clicked = false;
-    this.yawDelta = 0;
-    this.pitchDelta = 0;
+
+  function onKeyDown(event) {
+    const k = keyName(event);
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault();
+    }
+    if (!event.repeat) pressed.add(k);
+    down.add(k);
   }
-  down(code) { return !!this.keys[code]; }
-  axis() {
-    let x = 0, z = 0;
-    if (this.down('KeyW') || this.down('ArrowUp')) z += 1;
-    if (this.down('KeyS') || this.down('ArrowDown')) z -= 1;
-    if (this.down('KeyA') || this.down('ArrowLeft')) x -= 1;
-    if (this.down('KeyD') || this.down('ArrowRight')) x += 1;
-    return { x, z };
+
+  function onKeyUp(event) {
+    down.delete(keyName(event));
   }
-  consumeLook() {
-    const d = { yaw: this.yawDelta, pitch: this.pitchDelta };
-    this.yawDelta = 0; this.pitchDelta = 0;
-    return d;
+
+  function onPointerDown(event) {
+    if (event.target && event.target.closest && event.target.closest('button')) return;
+    dragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
   }
-  consumeClick() { const c = this.clicked; this.clicked = false; return c; }
+
+  function onPointerMove(event) {
+    if (!dragging) return;
+    cameraYaw -= (event.clientX - lastX) * 0.005;
+    cameraPitch += (event.clientY - lastY) * 0.003;
+    cameraPitch = Math.max(0.08, Math.min(1.1, cameraPitch));
+    lastX = event.clientX;
+    lastY = event.clientY;
+  }
+
+  function onPointerUp() {
+    dragging = false;
+  }
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+
+  return {
+    // Held-state helpers the loop calls each frame.
+    isDown(name) {
+      return down.has(name);
+    },
+    // Virtual keys, for on-screen buttons wired by bindTouchButtons.
+    holdKey(name) {
+      down.add(name);
+    },
+    releaseKey(name) {
+      down.delete(name);
+    },
+    tapKey(name) {
+      pressed.add(name);
+      down.add(name);
+      setTimeout(() => down.delete(name), 120);
+    },
+    // True once, on the frame after the key went down.
+    wasPressed(name) {
+      return pressed.has(name);
+    },
+    // -1..1 steering and throttle axes, from WASD or arrows.
+    steerAxis() {
+      let s = 0;
+      if (down.has('a') || down.has('ArrowLeft')) s -= 1;
+      if (down.has('d') || down.has('ArrowRight')) s += 1;
+      return s;
+    },
+    moveAxis() {
+      let m = 0;
+      if (down.has('w') || down.has('ArrowUp')) m += 1;
+      if (down.has('s') || down.has('ArrowDown')) m -= 1;
+      return m;
+    },
+    running() {
+      return down.has('Shift');
+    },
+    cameraYaw() {
+      return cameraYaw;
+    },
+    cameraPitch() {
+      return cameraPitch;
+    },
+    // Called at the end of every frame: clears the one-shot presses.
+    endFrame() {
+      pressed.clear();
+    },
+    destroy() {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    },
+  };
+}
+
+// Second pass on input: touch-friendly on-screen buttons are wired here
+// too, so a mouse-only player can drive with the same actions. Each
+// button simply holds or taps the matching virtual key.
+
+export function bindTouchButtons(input, root) {
+  // `input` exposes the same key sets the keyboard path fills; buttons
+  // press and release them through the documented helpers below.
+  const holds = root.querySelectorAll('[data-hold]');
+  holds.forEach((button) => {
+    const key = button.getAttribute('data-hold');
+    button.addEventListener('pointerdown', (e) => { e.preventDefault(); input.holdKey(key); });
+    button.addEventListener('pointerup', () => input.releaseKey(key));
+    button.addEventListener('pointerleave', () => input.releaseKey(key));
+  });
+  const taps = root.querySelectorAll('[data-tap]');
+  taps.forEach((button) => {
+    const key = button.getAttribute('data-tap');
+    button.addEventListener('click', () => input.tapKey(key));
+  });
 }
