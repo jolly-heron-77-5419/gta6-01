@@ -1,134 +1,157 @@
-// SOLMAR BAY — the heads-up display and the minimap.
-// One job: keep the DOM readouts (health, stars, cash, objective,
-// speed) and the top-down minimap canvas in step with the game state.
-// It never decides game logic; it only shows it.
+// The HUD: health, wanted stars, cash, the current objective, speed, and
+// a live minimap drawn on a small canvas. All DOM, laid over the 3D view,
+// so it stays crisp at any window size and reads well in a screenshot.
 
-import { CFG } from './config.js';
-import { STREET_LINES } from './world.js';
+import { CITY } from './config.js';
 
-const MAP_HALF = 200; // world units the minimap covers on each side
+export function createHud() {
+  const hud = document.getElementById('hud');
+  const healthFill = document.getElementById('health-fill');
+  const healthText = document.getElementById('health-text');
+  const cashText = document.getElementById('cash');
+  const starsEl = document.getElementById('stars');
+  const objectiveEl = document.getElementById('objective');
+  const objectiveTitle = document.getElementById('objective-title');
+  const speedEl = document.getElementById('speed');
+  const toastEl = document.getElementById('toast');
+  const minimap = document.getElementById('minimap');
+  const mapCtx = minimap.getContext('2d');
+  let toastTimer = 0;
 
-function starString(stars) {
-  let out = '';
-  for (let i = 0; i < CFG.wanted.maxStars; i++) out += i < stars ? '★' : '☆';
-  return out;
-}
+  function show() {
+    hud.style.display = 'block';
+  }
+  function hide() {
+    hud.style.display = 'none';
+  }
 
-export function createHud(doc) {
-  const healthFill = doc.getElementById('health-fill');
-  const healthText = doc.getElementById('health-text');
-  const starsEl = doc.getElementById('stars');
-  const cashEl = doc.getElementById('cash');
-  const objectiveEl = doc.getElementById('objective');
-  const objectiveLabel = doc.getElementById('objective-label');
-  const speedEl = doc.getElementById('speed');
-  const speedValue = doc.getElementById('speed-value');
-  const bannerEl = doc.getElementById('banner');
-  const bannerTitle = doc.getElementById('banner-title');
-  const bannerText = doc.getElementById('banner-text');
-  const damageEl = doc.getElementById('damage-flash');
-  const mapCanvas = doc.getElementById('minimap');
-  const mapCtx = mapCanvas.getContext('2d');
-  let bannerTimer = null;
-  let flashTimer = null;
+  // A briefing line in the middle of the screen, fading after a while.
+  function toast(message, seconds = 6) {
+    toastEl.textContent = message;
+    toastEl.style.opacity = '1';
+    toastTimer = seconds;
+  }
 
-  function toMap(x, z) {
-    const s = mapCanvas.width / (MAP_HALF * 2);
-    return { x: (x + MAP_HALF) * s, y: (z + MAP_HALF) * s };
+  function setObjective(title, text) {
+    objectiveTitle.textContent = title;
+    objectiveEl.textContent = text;
+  }
+
+  function setStars(count) {
+    let text = '';
+    for (let i = 0; i < 5; i += 1) text += i < count ? '★' : '☆';
+    starsEl.textContent = text;
+    starsEl.style.color = count > 0 ? '#ffd23e' : '#888888';
+  }
+
+  function setHealth(value) {
+    const pct = Math.max(0, Math.min(100, value));
+    healthFill.style.width = `${pct}%`;
+    healthFill.style.background = pct > 50 ? '#4caf50' : pct > 25 ? '#ff9800' : '#f44336';
+    healthText.textContent = `${Math.round(pct)}`;
+  }
+
+  function setCash(value) {
+    cashText.textContent = `$${value.toLocaleString('en-US')}`;
+  }
+
+  function setSpeed(kmh, driving) {
+    speedEl.style.display = driving ? 'block' : 'none';
+    if (driving) speedEl.textContent = `${Math.round(kmh)} km/h`;
+  }
+
+  function tickToast(dt) {
+    if (toastTimer > 0) {
+      toastTimer -= dt;
+      if (toastTimer <= 0) toastEl.style.opacity = '0';
+    }
+  }
+
+  // The minimap: the street grid, the sea, the player arrow, traffic,
+  // police and the mission marker, all in a 180-pixel square.
+  function drawMinimap(state) {
+    const size = minimap.width;
+    const scale = size / (CITY.half * 2 + 90);
+    const toMap = (x, z) => [
+      (x + CITY.half + 45) * scale,
+      (z + CITY.half + 45) * scale,
+    ];
+    mapCtx.fillStyle = 'rgba(12, 20, 28, 0.88)';
+    mapCtx.fillRect(0, 0, size, size);
+    // The sea on the west edge.
+    const [seaX] = toMap(CITY.sandWest, 0);
+    mapCtx.fillStyle = '#2e8fa8';
+    mapCtx.fillRect(0, 0, seaX, size);
+    mapCtx.fillStyle = '#e8d5a8';
+    mapCtx.fillRect(seaX, 0, toMap(CITY.sandEast, 0)[0] - seaX, size);
+    // Streets.
+    mapCtx.strokeStyle = '#5a636e';
+    mapCtx.lineWidth = 3;
+    for (const c of CITY.streets) {
+      const [x1, y1] = toMap(c, -CITY.half);
+      const [x2, y2] = toMap(c, CITY.half);
+      mapCtx.beginPath();
+      mapCtx.moveTo(x1, y1);
+      mapCtx.lineTo(x2, y2);
+      mapCtx.stroke();
+      const [hx1, hy1] = toMap(-CITY.half, c);
+      const [hx2, hy2] = toMap(CITY.half, c);
+      mapCtx.beginPath();
+      mapCtx.moveTo(hx1, hy1);
+      mapCtx.lineTo(hx2, hy2);
+      mapCtx.stroke();
+    }
+    // Mission marker: a pulsing yellow diamond.
+    if (state.marker) {
+      const [mx, my] = toMap(state.marker.x, state.marker.z);
+      const pulse = 4 + Math.sin(state.time * 5) * 1.5;
+      mapCtx.fillStyle = '#ffd23e';
+      mapCtx.beginPath();
+      mapCtx.moveTo(mx, my - pulse - 2);
+      mapCtx.lineTo(mx + pulse, my);
+      mapCtx.lineTo(mx, my + pulse + 2);
+      mapCtx.lineTo(mx - pulse, my);
+      mapCtx.closePath();
+      mapCtx.fill();
+    }
+    // Traffic as pale dots, police as red dots.
+    for (const car of state.traffic) {
+      const [cx, cy] = toMap(car.pos.x, car.pos.z);
+      mapCtx.fillStyle = '#d8d2c0';
+      mapCtx.fillRect(cx - 1.5, cy - 1.5, 3, 3);
+    }
+    for (const car of state.police) {
+      const [cx, cy] = toMap(car.pos.x, car.pos.z);
+      mapCtx.fillStyle = '#ff4444';
+      mapCtx.beginPath();
+      mapCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+      mapCtx.fill();
+    }
+    // The player: a white arrow pointing where they face.
+    const [px, py] = toMap(state.playerX, state.playerZ);
+    mapCtx.save();
+    mapCtx.translate(px, py);
+    mapCtx.rotate(Math.PI - state.heading);
+    mapCtx.fillStyle = '#ffffff';
+    mapCtx.beginPath();
+    mapCtx.moveTo(0, -7);
+    mapCtx.lineTo(5, 5);
+    mapCtx.lineTo(-5, 5);
+    mapCtx.closePath();
+    mapCtx.fill();
+    mapCtx.restore();
   }
 
   return {
-    setHealth(health, max) {
-      const pct = Math.max(0, Math.round((health / max) * 100));
-      healthFill.style.width = `${pct}%`;
-      healthFill.style.background = pct > 50 ? '#37c978' : pct > 25 ? '#f0a832' : '#e5484d';
-      healthText.textContent = `${pct}`;
-    },
-    setStars(stars) {
-      starsEl.textContent = starString(stars);
-      starsEl.classList.toggle('hot', stars >= 3);
-    },
-    setCash(cash) {
-      cashEl.textContent = `$${cash.toLocaleString('en-US')}`;
-    },
-    setObjective(text, label) {
-      objectiveEl.textContent = text;
-      if (label) objectiveLabel.textContent = label;
-    },
-    setSpeed(kmh, driving) {
-      speedEl.style.display = driving ? 'block' : 'none';
-      if (driving) speedValue.textContent = `${Math.round(kmh)}`;
-    },
-    showBanner(title, text, seconds = 5) {
-      bannerTitle.textContent = title;
-      bannerText.textContent = text;
-      bannerEl.classList.add('show');
-      if (bannerTimer) clearTimeout(bannerTimer);
-      bannerTimer = setTimeout(() => bannerEl.classList.remove('show'), seconds * 1000);
-    },
-    hideBanner() {
-      bannerEl.classList.remove('show');
-    },
-    flashDamage() {
-      damageEl.classList.add('show');
-      if (flashTimer) clearTimeout(flashTimer);
-      flashTimer = setTimeout(() => damageEl.classList.remove('show'), 180);
-    },
-
-    // Top-down map: sea and sand on the east edge, the street grid,
-    // then the player arrow, traffic, police and the mission marker.
-    drawMinimap(state, elapsed) {
-      const w = mapCanvas.width;
-      const ctx = mapCtx;
-      ctx.clearRect(0, 0, w, w);
-      ctx.fillStyle = '#20262e';
-      ctx.fillRect(0, 0, w, w);
-      // Sand and sea.
-      const sand = toMap(CFG.city.beachStartX, 0);
-      ctx.fillStyle = '#e8d29a';
-      ctx.fillRect(sand.x, 0, toMap(CFG.city.seaStartX, 0).x - sand.x, w);
-      ctx.fillStyle = '#2e7fa8';
-      ctx.fillRect(toMap(CFG.city.seaStartX, 0).x, 0, w, w);
-      // Roads.
-      ctx.strokeStyle = '#4a5058';
-      ctx.lineWidth = 5;
-      for (const line of STREET_LINES) {
-        const a = toMap(line, -MAP_HALF);
-        const b = toMap(line, MAP_HALF);
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(a.y, a.x); ctx.lineTo(b.y, b.x); ctx.stroke();
-      }
-      const dot = (x, z, color, r) => {
-        const p = toMap(x, z);
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-      };
-      for (const car of state.cars) dot(car.x, car.z, '#ffd23c', 2.5);
-      for (const ped of state.pedestrians || []) dot(ped.x, ped.z, '#9fb4c8', 1.6);
-      for (const cop of state.police) {
-        dot(cop.x, cop.z, Math.floor(elapsed * 4) % 2 === 0 ? '#ff4444' : '#4488ff', 3.5);
-      }
-      if (state.marker) {
-        const p = toMap(state.marker.x, state.marker.z);
-        const pulse = 5 + Math.sin(elapsed * 4) * 2;
-        ctx.strokeStyle = '#ffc93c';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(p.x, p.y, pulse, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = '#ffc93c';
-        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
-      }
-      // Player arrow, pointing along the heading.
-      const pp = toMap(state.player.x, state.player.z);
-      ctx.save();
-      ctx.translate(pp.x, pp.y);
-      // Map x is world x and map y is world z, so a heading whose forward
-      // is (sin h, cos h) needs a canvas rotation of PI - h.
-      ctx.rotate(Math.PI - state.player.heading);
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.moveTo(0, -7); ctx.lineTo(5, 6); ctx.lineTo(-5, 6); ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    },
+    show,
+    hide,
+    toast,
+    setObjective,
+    setStars,
+    setHealth,
+    setCash,
+    setSpeed,
+    tickToast,
+    drawMinimap,
   };
 }
